@@ -9,10 +9,10 @@
 
 #include "panelOps.h"
 
-#define SCL_PIN 22
-#define SDA_PIN 21
+#define SCL_PIN 22 //I2C Clock GPIO pin
+#define SDA_PIN 21 //I2C Data GPIO pin
 
-#define TAG "I2C Test"
+#define TAG "SH1106_I2C Driver"
 
 void initGPIO(){
     //I2C GPIO config.
@@ -38,6 +38,8 @@ void claimBus(){
     vTaskDelay(10 / portTICK_PERIOD_MS);
     gpio_set_level(SCL_PIN, 0);
     vTaskDelay(10 / portTICK_PERIOD_MS);
+
+    ESP_LOGI(TAG, "I2C bus claimed!");
 }
 
 void sendBit(uint32_t level){
@@ -128,18 +130,25 @@ esp_err_t initDisplay(){
     return ESP_OK;
 }
 
-void toggleDisplay(int toggle){
-    if(toggle == 1){
-        sendCommand(SH1106_CMD_SET_DISP_ON);
+int displayStatus = 0;
+esp_err_t toggleDisplay(){
+    if(displayStatus == 0){
+        ESP_RETURN_ON_ERROR(sendCommand(SH1106_CMD_SET_DISP_ON),
+        TAG, "could not set display on");
+        displayStatus = 1;
         ESP_LOGI(TAG, "Display turning on");
     }else{
-        sendCommand(SH1106_CMD_SET_DISP_OFF);
+        ESP_RETURN_ON_ERROR(sendCommand(SH1106_CMD_SET_DISP_OFF),
+        TAG, "could not set display off");
+        displayStatus = 0;
         ESP_LOGI(TAG, "Display shutting off");
     }
+    return ESP_OK;
 }
 
 void deinitDisplay(){
     releaseBus();
+    ESP_LOGI(TAG, "I2C bus released!");
 }
 
 void app_main(void){
@@ -147,12 +156,23 @@ void app_main(void){
 
     if(initDisplay() != ESP_OK){
         ESP_LOGE(TAG, "Display could not be initalised!");
+        deinitDisplay();
+        return;
+    }
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+    
+    if(toggleDisplay() != ESP_OK){
+        ESP_LOGE(TAG, "Display could not be toggled!");
+        deinitDisplay();
+        return;
+    }
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+    
+    if(toggleDisplay() != ESP_OK){
+        ESP_LOGE(TAG, "Display could not be toggled!");
+        deinitDisplay();
         return;
     }
 
-    vTaskDelay(500 / portTICK_PERIOD_MS);
-    toggleDisplay(1);
-    vTaskDelay(500 / portTICK_PERIOD_MS);
-    toggleDisplay(0);
     deinitDisplay();
 }
