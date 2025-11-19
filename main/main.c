@@ -4,6 +4,8 @@
 #include <driver/gpio.h>
 
 #include <esp_log.h>
+#include <esp_err.h>
+#include <esp_check.h>
 
 #include "panelOps.h"
 
@@ -60,23 +62,37 @@ int readBit(){
     return res;
 }
 
-uint32_t sendByte(uint8_t byte){
+esp_err_t sendByte(uint8_t byte){
     for (int8_t i = 7; i >= 0; i--) { //Read our byte from MSB first to send to I2C bus
         uint32_t bit = (byte & (1ul << i)) >> i; //Using a bit mask to select Ith bit, AND our byte and return bit to LSB to read 1/0 on Ith bit. (Is Ith bit 1 or 0)
         sendBit(bit);
     }
     uint32_t res = readBit();
-    return res;
+    if(res == 0){
+        return ESP_OK;
+    }
+
+    return ESP_ERR_INVALID_RESPONSE;
 }
 
-uint32_t sendCommand(uint8_t cmd){
-    if(sendByte(0x80) == 0){ //Control byte, 1000 0000, Co bit 1 (1 data byte to follow), Data/-Command bit 0, 6 trailing 0s
-        if(sendByte(cmd) == 0){
-            return 0;
-        }
-    }
-    ESP_LOGE(TAG, "ERROR: NACK Received!");
-    return 1;
+esp_err_t sendCommand(uint8_t cmd){
+    ESP_RETURN_ON_ERROR(sendByte(0x80), //Control byte, 1000 0000, Co bit 1 (1 data byte to follow), Data/-Command bit 0, 6 trailing 0s
+    TAG, "command control byte returned NACK");
+
+    ESP_RETURN_ON_ERROR(sendByte(cmd),
+    TAG, "command byte returned NACK");
+
+    return ESP_OK;
+}
+
+esp_err_t sendDoubleCommand(uint8_t cmd1, uint8_t cmd2){
+    ESP_RETURN_ON_ERROR(sendCommand(cmd1),
+    TAG, "could not execute command (1/2): 0x%x", cmd1);
+
+    ESP_RETURN_ON_ERROR(sendCommand(cmd2),
+    TAG, "could not execute command (2/2): 0x%x", cmd2);
+
+    return ESP_OK;
 }
 
 void releaseBus(){
@@ -86,18 +102,30 @@ void releaseBus(){
     gpio_set_direction(SDA_PIN, GPIO_MODE_INPUT);
 }
 
-void initDisplay(){
+esp_err_t initDisplay(){
     claimBus();
-    if(sendByte(0x78) == 0) //Current slave address in 8bits, slave addresses are 7bits default followed by R/!W bit. (In this case, 0x3C is our 7bit address, appended with 0 bit leads us to 0x78)
-        if(sendCommand(SH1106_CMD_SET_MULTIPLEX_RATIO) == 0) // Multiplex ratio double byte command (1/2)
-            if(sendCommand(SH1106_DATA_SET_MULTIPLEX_RATIO_DEFAULT) == 0) // Multiplex ratio double byte command (2/2)
-                if(sendCommand(SH1106_CMD_SET_COMPINS) == 0) //Common signals pad config double byte command (1/2)
-                    if(sendCommand(SH1106_DATA_SET_COMPINS_DEFAULT) == 0) //Common signals pad config double byte command (2/2)
-                        if(sendCommand(SH1106_CMD_SET_DISP_OFF) == 0) //Display off
-                            if(sendCommand(SH1106_CMD_SET_CHARGE_PUMP) == 0) //Charge pump control double byte(1/2)
-                                if(sendCommand(SH1106_DATA_SET_CHARGE_PUMP_ON) == 0) //Charge pump control double byte(2/2)
-                                    if(sendCommand(SH1106_CMD_SET_REVERSE_OFF) == 0) //Reverse display off
-                                            ESP_LOGI(TAG, "Display initialised!");
+
+    int slaveAddr = 0x78;
+    ESP_RETURN_ON_ERROR(sendByte(slaveAddr),
+    TAG, "slave could not be reached at: 0x%x", slaveAddr);
+
+    ESP_RETURN_ON_ERROR(sendDoubleCommand(SH1106_CMD_SET_MULTIPLEX_RATIO, SH1106_DATA_SET_MULTIPLEX_RATIO_DEFAULT),
+    TAG, "could not set multiplex ratio");
+
+    ESP_RETURN_ON_ERROR(sendDoubleCommand(SH1106_CMD_SET_COMPINS, SH1106_DATA_SET_COMPINS_DEFAULT),
+    TAG, "could not set common signals pad config");
+
+    ESP_RETURN_ON_ERROR(sendCommand(SH1106_CMD_SET_DISP_OFF),
+    TAG, "could not set display off");
+
+    ESP_RETURN_ON_ERROR(sendDoubleCommand(SH1106_CMD_SET_CHARGE_PUMP, SH1106_DATA_SET_CHARGE_PUMP_ON),
+    TAG, "could not set charge pump on");
+
+    ESP_RETURN_ON_ERROR(sendCommand(SH1106_CMD_SET_REVERSE_OFF),
+    TAG, "could not set reverse off");
+
+    ESP_LOGI(TAG, "Display Initialised!");
+    return ESP_OK;
 }
 
 void toggleDisplay(int toggle){
@@ -116,7 +144,12 @@ void deinitDisplay(){
 
 void app_main(void){
     initGPIO();
-    initDisplay();
+
+    if(initDisplay() != ESP_OK){
+        ESP_LOGE(TAG, "Display could not be initalised!");
+        return;
+    }
+
     vTaskDelay(500 / portTICK_PERIOD_MS);
     toggleDisplay(1);
     vTaskDelay(500 / portTICK_PERIOD_MS);
