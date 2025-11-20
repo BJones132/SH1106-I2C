@@ -97,7 +97,7 @@ esp_err_t sendCommand(uint8_t cmd){
 }
 
 esp_err_t sendData(uint8_t data){
-    ESP_RETURN_ON_ERROR(sendByte(0xC0),
+    ESP_RETURN_ON_ERROR(sendByte(0xC0), //For writing data to the display, the control byte needs to specify that we are writing data. (1100 0000)
     TAG, "control byte returned NACK");
 
     ESP_RETURN_ON_ERROR(sendByte(data),
@@ -106,7 +106,7 @@ esp_err_t sendData(uint8_t data){
     return ESP_OK;
 }
 
-esp_err_t sendDoubleCommand(uint8_t cmd1, uint8_t cmd2){
+esp_err_t sendDoubleCommand(uint8_t cmd1, uint8_t cmd2){ //Some commands are double byte commands and require 2 commands to be sent at a time.
     ESP_RETURN_ON_ERROR(sendCommand(cmd1),
     TAG, "could not execute command (1/2): 0x%x", cmd1);
 
