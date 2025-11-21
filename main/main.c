@@ -8,6 +8,7 @@
 #include <esp_check.h>
 
 #include "panelOps.h"
+#include "panelFont.h"
 
 #define SCL_PIN 22 //I2C Clock GPIO pin
 #define SDA_PIN 21 //I2C Data GPIO pin
@@ -131,7 +132,7 @@ esp_err_t clearDisplay(){
         ESP_RETURN_ON_ERROR(sendCommand(SH1106_CMD_BEGIN_RWM), //Begin our RWM loop
         TAG, "could not begin read-write-modify loop");
 
-        for (size_t i = 0; i < 132; i++) {  //SH1106 is 132*64 on paper
+        for (size_t i = 0; i < 132; i++) {  //SH1106 is 132*64 on paper however only columns 2->130 are visible on my display (128*64 effective)
             ESP_RETURN_ON_ERROR(sendData(0x00), //within our page, this will set each row of each column to 0 or black/off
             TAG, "could not clear display at index: %u", i);
         }
@@ -195,6 +196,51 @@ void deinitDisplay(){
     ESP_LOGI(TAG, "I2C bus released!");
 }
 
+esp_err_t drawGlyph(const int* glyph){
+    ESP_RETURN_ON_ERROR(sendCommand(SH1106_CMD_BEGIN_RWM),
+    TAG, "could not begin read-write-modify loop");
+
+    for (size_t i = 0; i < 8; i++)
+    {
+        ESP_RETURN_ON_ERROR(sendData(glyph[i]),
+        TAG, "could not draw glyph section index: %u", i);
+    }
+
+    ESP_RETURN_ON_ERROR(sendCommand(SH1106_CMD_END_RWM),
+    TAG, "could not end read-write-modify loop");
+
+    return ESP_OK;
+}
+
+esp_err_t drawText(const char* text){
+    ESP_RETURN_ON_ERROR(sendCommand(SH1106_CMD_SET_PAGE_ADDR(7)), //Set our page (8 vertical bits AKA our current 8 bit row)
+    TAG, "could not set page address");
+
+    uint8_t columnOffset = 2; //Our display only begins showing change from column 2+
+
+    for (size_t i = 0; i < strlen(text); i++) {
+        if(i >= 16){ //We can only draw 16 characters in each page (8 bit row) later, we will introduce wrapping
+            ESP_LOGI(TAG, "index too high, breaking!");
+            break;
+        }
+
+        uint8_t columnIndex = columnOffset + (i*8); //For each character, increment column index by 8 bits (the width/height of our characters)
+        uint8_t loColumnAddr = (columnIndex & 0x0F); //AND our column index with 0000 1111, select our 4 low bits
+        uint8_t hiColumnAddr = (columnIndex & 0xF0) >> 4; //AND our column index with 1111 0000 and shift right 4 bits, select our 4 high bits
+
+        ESP_RETURN_ON_ERROR(sendCommand(SH1106_CMD_SET_LOWER_COLUMN_ADDR(loColumnAddr)), //Set our column address for this character, again, we will likely introduce printing a full page at a time.
+        TAG, "could not set column lower address");
+
+        ESP_RETURN_ON_ERROR(sendCommand(SH1106_CMD_SET_UPPER_COLUMN_ADDR(hiColumnAddr)),
+        TAG, "could not set column higher address");
+
+        ESP_RETURN_ON_ERROR(drawGlyph(GLYPH[(int)text[i]]), //convert our character into ASCII code which our panelFont GLYPHs are laid out in.
+        TAG, "could not draw glyph");
+    }
+
+    return ESP_OK;
+}
+
 void app_main(void){
     initGPIO();
 
@@ -206,6 +252,12 @@ void app_main(void){
     
     if(toggleDisplay() != ESP_OK){
         ESP_LOGE(TAG, "Display could not be toggled!");
+        deinitDisplay();
+        return;
+    }
+
+    if(drawText("HELLO, WORLD!") != ESP_OK){
+        ESP_LOGE(TAG, "Could not draw text to display!");
         deinitDisplay();
         return;
     }
